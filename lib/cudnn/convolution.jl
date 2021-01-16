@@ -65,10 +65,10 @@ function cudnnConvolutionForwardWithDefaults(
     mathType::cudnnMathType_t = math_mode(),
     reorderType::cudnnReorderType_t = CUDNN_DEFAULT_REORDER,  # related to cudnnReorderFilterAndBias?
     group::Integer = 1,
-    convDesc::cudnnConvolutionDescriptor = cudnnConvolutionDescriptor(convdims(padding,size(x)), convdims(stride,size(x)), convdims(dilation,size(x)), mode, cudnnDataType(eltype(x)), mathType, reorderType, Cint(group)),
+    format::cudnnTensorFormat_t = CUDNN_TENSOR_NCHW,
+    convDesc::cudnnConvolutionDescriptor = cudnnConvolutionDescriptor(convdims(padding,size(x),format), convdims(stride,size(x),format), convdims(dilation,size(x),format), mode, cudnnDataType(eltype(x)), mathType, reorderType, Cint(group)),
 
     # output array, descriptors, scaling factors
-    format::cudnnTensorFormat_t = CUDNN_TENSOR_NCHW,
     xDesc::cudnnTensorDescriptor = cudnnTensorDescriptor(x; format),
     wDesc::cudnnFilterDescriptor = cudnnFilterDescriptor(w; format),
     y = cudnnConvolutionForwardOutput(x, xDesc, wDesc, convDesc, format),
@@ -173,18 +173,17 @@ end
 
 
 # Convert the integer, tuple or array to convolution dims compatible with array size
-function convdims(d, s::Dims{N}) where N
-    if d isa Integer || length(d) == N-2
-        Cint[reverse(min.(d,s[1:N-2]))...]
-    else
-        throw(DimensionMismatch("Cannot conv $(Base.dims2string(s)) array with $d convdims."))
-    end
+function convdims(d, s::Dims{N}, format) where N
+    @assert d isa Integer || length(d) == N-2  "Cannot conv $(Base.dims2string(s)) array with $d convdims."
+    xdims = (format === CUDNN_TENSOR_NHWC ? (2:N-1) : (1:N-2))
+    return Cint[reverse(min.(d,s[xdims]))...]
 end
 
-convdims(d, s::Dims{3}) = convdims(d, (1,s...))
-convdims(d, s::Dims{2}) = convdims(d, (1,1,s...))
-convdims(d, s::Dims{1}) = convdims(d, (1,1,1,s...))
-convdims(d, s::Dims{0}) = convdims(d, (1,1,1,1))
+convdims(d, s::Dims) = convdims(d, s, CUDNN_TENSOR_NCHW)
+convdims(d, s::Dims{0}, format::cudnnTensorFormat_t) = convdims(d, (1,1,1,1), format)
+convdims(d, s::Dims{1}, format::cudnnTensorFormat_t) = convdims(d, (1,1,1,s[1]), format)    # (1,1,1,Cy)
+convdims(d, s::Dims{2}, format::cudnnTensorFormat_t) = convdims(d, (1,1,s[1],s[2]), format) # (1,1,Cx,Cy)
+convdims(d, s::Dims{3}, format::cudnnTensorFormat_t) = convdims(d, format === CUDNN_TENSOR_NHWC ? (s[1],1,s[2],s[3]) : (1, s...), format)
 
 
 ## Utilities to find a fast algorithm
