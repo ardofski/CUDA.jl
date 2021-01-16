@@ -17,9 +17,9 @@ All tensors should have the same number of dimensions. If they are less than 4-D
 dimensions are assumed to be padded on the left with 1's. `x` has size `(X...,Cx,N)` where
 `(X...)` are the spatial dimensions, `Cx` is the number of input channels, and `N` is the
 number of instances. `y,z` have size `(Y...,Cy,N)` where `(Y...)` are the spatial dimensions
-and `Cy` is the number of output channels. Both `Cx` and `Cy` have to be an exact multiple
-of `group`.  `w` has size `(W...,Cx÷group,Cy)` where `(W...)` are the filter
-dimensions. `bias` has size `(1...,Cy,1)`.
+and `Cy` is the number of output channels (`y` and `z` can be the same array). Both `Cx` and
+`Cy` have to be an exact multiple of `group`.  `w` has size `(W...,Cx÷group,Cy)` where
+`(W...)` are the filter dimensions. `bias` has size `(1...,Cy,1)`.
 
 The arguments `padding`, `stride` and `dilation` can be specified as `n-2` dimensional
 vectors, tuples or a single integer which is assumed to be repeated `n-2` times. If any of
@@ -30,7 +30,7 @@ https://towardsdatascience.com/a-comprehensive-introduction-to-different-types-o
 Keyword arguments:
 * `activation = CUDNN_ACTIVATION_IDENTITY`: the only other supported option is `CUDNN_ACTIVATION_RELU`
 * `bias = nothing`: add bias if provided
-* `z = y`: add `beta*z`, `z` can be `y` or another array similar to `y`
+* `z = nothing`: add `beta*z`, `z` can be `nothing`, `y` or another array similar to `y`
 * `alpha = 1, beta = 0`: scaling parameters
 * `format = CUDNN_TENSOR_NCHW`: order of tensor dimensions, the other alternative is `CUDNN_TENSOR_NHWC`. Note that Julia dimensions will have the opposite order, i.e. WHCN or CWHN.
 
@@ -78,9 +78,9 @@ function cudnnConvolutionForwardWithDefaults(
 
     # convbiasact arguments
     bias = nothing,
+    z = nothing,
     biasDesc::Union{Nothing,cudnnTensorDescriptor} = (bias===nothing ? nothing : cudnnTensorDescriptor(bias; format)),
-    z = y,
-    zDesc::cudnnTensorDescriptor = cudnnTensorDescriptor(z; format),
+    zDesc::Union{Nothing,cudnnTensorDescriptor} = (z === nothing ? nothing : cudnnTensorDescriptor(z; format)),
     activation::cudnnActivationMode_t = CUDNN_ACTIVATION_IDENTITY, # coef and nanOpt are not useful options for convbiasact which only supports relu
 
     # gradient buffers
@@ -91,12 +91,6 @@ function cudnnConvolutionForwardWithDefaults(
 )
     T = eltype(x)
     alpha, beta = scalingParameter(T,alpha), scalingParameter(T,beta)
-    if bias === nothing && (activation !== CUDNN_ACTIVATION_IDENTITY || (z !== y && beta[] != 0))
-        # Cannot call cudnnConvolutionBiasActivationForward without a bias unfortunately
-        bdim = (format === CUDNN_TENSOR_NHWC ? 1 : ndims(y)-1)
-        bias = fill!(similar(w, ntuple(i->(i==bdim ? size(y,i) : 1), ndims(y))), 0)
-        biasDesc = cudnnTensorDescriptor(bias; format)
-    end
     # Backward called separately on each variable. We will calculate all gradients on first call. Use `dready` to avoid subsequent calls.
     dready = Ref{Bool}(false)   # this will be turned to `true` by the first backward call.
     cudnnConvolutionForwardAD(w, x, bias, z; y, activation, convDesc, wDesc, xDesc, yDesc, zDesc, biasDesc, alpha, beta, dw, dx, dz, dbias, dready)
@@ -112,6 +106,14 @@ function cudnnConvolutionForwardAD(w, x, bias, z; y, activation, convDesc, wDesc
         else
             @assert activation === CUDNN_ACTIVATION_IDENTITY || activation === CUDNN_ACTIVATION_RELU  "Only RELU and IDENTITY supported"
             activationDesc = cudnnActivationDescriptor(activation, CUDNN_NOT_PROPAGATE_NAN, Cdouble(1.0))
+            # bias and z cannot be null for cudnnConvolutionBiasActivationForward
+            if z === nothing; z, zDesc = y, yDesc; beta[] = 0; end
+            if bias === nothing
+                format = cudnnGetFilterDescriptor(wDesc)[3]
+                bdim = (format === CUDNN_TENSOR_NHWC ? 1 : ndims(y)-1)
+                bias = fill!(similar(w, ntuple(i->(i==bdim ? size(y,i) : 1), ndims(y))), 0)
+                biasDesc = cudnnTensorDescriptor(bias; format)
+            end
             cudnnConvolutionBiasActivationForward(handle(), alpha, xDesc, x, wDesc, w, convDesc, p.algo, workspace, sizeof(workspace), beta, zDesc, z, biasDesc, bias, activationDesc, yDesc, y)
         end
     end

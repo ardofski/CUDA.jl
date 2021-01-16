@@ -59,7 +59,7 @@ function cudnnGetTensorDescriptor(d::cudnnTensorDescriptor)
     return T,D,S
 end
 
-function cudnnGetFilterDescriptor(d::cudnnTensorDescriptor)
+function cudnnGetFilterDescriptor(d::cudnnFilterDescriptor)
     nbDimsRequested = CUDNN_DIM_MAX
     dataType = Ref{cudnnDataType_t}(CUDNN_DATA_FLOAT)
     format = Ref{cudnnTensorFormat_t}(CUDNN_TENSOR_NCHW)
