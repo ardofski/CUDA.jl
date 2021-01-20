@@ -66,7 +66,6 @@ end
     @test Array(out) == (_a .+ 1)
 end
 
-
 @testset "ptxas-compatible control flow" begin
     @noinline function throw_some()
         throw(42)
@@ -117,6 +116,24 @@ end
 
 ############################################################################################
 
+@testset "PTX" begin
+
+@testset "local memory stores due to byval" begin
+    # JuliaGPU/GPUCompiler.jl#92
+    function kernel(y1, y2)
+        y = threadIdx().x == 1 ? y1 : y2
+        @inbounds y[] = 0
+        return
+    end
+
+    asm = sprint(io->CUDA.code_ptx(io, kernel, NTuple{2,CuDeviceArray{Float32,1,AS.Global}}))
+    @test !occursin(".local", asm)
+end
+
+end
+
+############################################################################################
+
 @testset "SASS" begin
 
 @testset "basic reflection" begin
@@ -133,6 +150,12 @@ end
     @eval kernel_341(ptr) = (@inbounds unsafe_store!(ptr, $(Symbol("dummy_^"))(unsafe_load(ptr))); nothing)
 
     @not_if_memcheck CUDA.code_sass(devnull, kernel_341, Tuple{Ptr{Int}})
+end
+
+@testset "device runtime" begin
+    kernel() = (CUDA.cudaGetLastError(); return)
+
+    @not_if_memcheck CUDA.code_sass(devnull, kernel, Tuple{})
 end
 
 end
